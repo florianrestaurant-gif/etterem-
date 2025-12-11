@@ -1,0 +1,1250 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// ─────────────────────────────────────────────
+// Enums
+// ─────────────────────────────────────────────
+
+enum PrepCategory {
+  SAUCE // mártás
+  STOCK // alaplé
+  SIDE // köret
+  GARNISH // díszítés / köret elem
+  DESSERT_BASE // desszert alap (piskóta, krém, coulis)
+  OTHER // egyéb
+}
+
+enum PrepStatus {
+  OK // rendben, elegendő mennyiség
+  LOW // kevés, pótolni kell
+  OUT // elfogyott
+  DISCARD // kidobandó / lejárt
+}
+
+enum KitchenZone {
+  HOT // melegkonyha
+  COLD // hideg előkészítő
+  DISHWASH // mosogató
+  STORAGE // raktár / hűtők
+  SERVICE // passz, tálaló
+  COMMON // közös területek (folyosó, lépcső, WC stb.)
+}
+
+enum StaffRole {
+  COOK // szakács
+  HELPER // kisegítő
+  BOTH // mindkettő / közös
+}
+
+enum CourseType {
+  soup // leves
+  main // főétel
+  dessert // desszert
+  other // egyéb
+}
+
+enum ShiftType {
+  MORNING // délelőtt
+  AFTERNOON // délután
+  EVENING // este
+  OTHER // egyéb / vegyes
+}
+
+enum ShiftWishStatus {
+  OPEN // nyitott kérés
+  IN_PROGRESS // folyamatban
+  DONE // teljesítve
+  CANCELLED // törölve / érvénytelen
+}
+
+// Műszak státusz
+enum ShiftStatus {
+  OPEN // nyitott műszak
+  HANDOVER_PENDING // átadásra jelölve
+  CLOSED // lezárt műszak
+}
+
+// Műszakátadás státusz
+enum ShiftHandoverStatus {
+  DRAFT
+  SUBMITTED
+}
+
+enum ChecklistGroup {
+  PREP // előkészítés
+  CLEANING // tisztaság / takarítás
+  ADMIN // admin / papírmunka
+  OTHER // egyéb
+}
+
+enum TaskStatus {
+  PENDING // még nem kezdték el
+  IN_PROGRESS // folyamatban
+  DONE // kész
+  CANCELLED // törölt / érvénytelen
+}
+
+enum OrderType {
+  FOOD_ORDER // ételrendelés
+  RESERVATION // asztalfoglalás
+}
+
+enum OrderStatus {
+  NEW
+  CONFIRMED
+  DONE
+  CANCELED
+}
+
+// Kétnyelvűség
+enum SupportedLanguage {
+  HU
+  SK
+}
+
+// SaaS jogosultságok
+enum MembershipRole {
+  PLATFORM_ADMIN // teljes platform
+  RESTAURANT_OWNER // adott étterem tulaj / főadmin
+  RESTAURANT_MANAGER // műszakvezető / manager
+  KITCHEN_STAFF // szakács, konyhai dolgozó
+  WAITER // felszolgáló
+  COURIER // futár
+  ACCOUNTANT // könyvelő / pénzügyes
+}
+
+// Takarítás gyakorisága
+enum CleaningFrequency {
+  DAILY
+  WEEKLY
+  MONTHLY
+  OTHER
+}
+
+// ─────────────────────────────────────────────
+// Esemény modul – enumok
+// ─────────────────────────────────────────────
+
+enum EventType {
+  BIRTHDAY // születésnap
+  WEDDING // esküvő
+  CHRISTENING // keresztelő
+  CORPORATE // céges rendezvény
+  OTHER // egyéb
+}
+
+enum EventStatus {
+  INQUIRY // csak érdeklődés
+  DRAFT // felvett, de nincs végleges ajánlat
+  OFFER_SENT // árajanlat elküldve
+  CONFIRMED // visszaigazolt
+  DEPOSIT_PAID // foglaló beérkezett
+  FINALIZED // megtartott, lezárt
+  CANCELLED // lemondva
+}
+
+enum MenuType {
+  BUFFET // svédasztal
+  SERVED // tányérszerviz
+  MIXED // vegyes
+}
+
+enum EventTaskRole {
+  MANAGER
+  KITCHEN
+  SERVICE
+  OTHER
+}
+
+enum EventTaskStatus {
+  TODO
+  IN_PROGRESS
+  DONE
+}
+
+// ─────────────────────────────────────────────
+// Core: User, Restaurant, Membership, Menük, Rendelések
+// ─────────────────────────────────────────────
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  password  String
+  createdAt DateTime @default(now())
+
+  // UI nyelvi preferencia
+  preferredLanguage SupportedLanguage @default(HU)
+  isGlobalAdmin     Boolean           @default(false)
+
+  memberships Membership[]
+
+  // Konyhai modul kapcsolatok
+  responsibleShifts  Shift[]              @relation("UserResponsibleShifts")
+  assignedTasks      ShiftTask[]          @relation("UserAssignedTasks")
+  shiftMemberships   ShiftMember[] // ki melyik műszakban dolgozott
+  shiftWishes        ShiftWish[]
+  doneChecklistItems ShiftChecklistItem[] // mely checklist pontokat pipálta ki
+
+  // HACCP / naplók
+  goodsReceipts     GoodsReceipt[]
+  goodsComplaints   GoodsComplaint[]
+  fridgeLogs        FridgeLog[]
+  cookingLogs       CookingLog[]
+  sampleLogs        SampleLog[]
+  cleaningLogs      CleaningLog[]
+  pestControlLogs   PestControlLog[]
+  prepChecklists    PrepChecklist[]
+  audits            Audit[]
+  correctiveActions CorrectiveAction[]
+  labTests          LabTest[]
+
+  // Műszakátadások, amiket ez a user töltött ki
+  shiftHandovers ShiftHandover[]
+}
+
+model Restaurant {
+  id        String   @id @default(cuid())
+  slug      String   @unique
+  name      String
+  phone     String?
+  createdAt DateTime @default(now())
+
+  // SaaS / nyelv / időzóna
+  defaultLanguage SupportedLanguage @default(HU)
+  timeZone        String? // pl. "Europe/Bratislava"
+
+  memberships Membership[]
+  menus       MenuWeek[]
+  orders      MenuOrder[]  @relation("RestaurantOrders")
+
+  revenueChannels RevenueChannel[]
+  dailyRecords    DailyRecord[]
+  dailyFinances   DailyFinance[]
+
+  // Konyhai modul relációk
+  shifts             Shift[]
+  checklistTemplates ChecklistTemplate[]
+  shiftHandovers     ShiftHandover[]
+
+  // Inventory kapcsolatok
+  inventorySheets        InventorySheet[]
+  inventoryTemplateItems InventoryTemplateItem[]
+
+  // Vendégek / kiszállítás / beszállítók
+  guests               Guest[]
+  deliveryOrders       DeliveryOrder[]
+  deliveryPriceConfigs DeliveryPriceConfig[]
+  suppliers            Supplier[]
+  goodsReceipts        GoodsReceipt[]
+  goodsComplaints      GoodsComplaint[]
+  fridgeLogs           FridgeLog[]
+  cookingLogs          CookingLog[]
+  sampleLogs           SampleLog[]
+  cleaningLogs         CleaningLog[]
+  pestControlLogs      PestControlLog[]
+  prepChecklists       PrepChecklist[]
+  audits               Audit[]
+  dishProfiles         DishProfile[]
+  correctiveActions    CorrectiveAction[]
+  labTests             LabTest[]
+  measuringDevices     MeasuringDevice[]
+  wishes               ShiftWish[]
+  events               RestaurantEvent[]
+  tableReservations    TableReservation[]
+}
+
+model Membership {
+  id           String         @id @default(cuid())
+  userId       String
+  restaurantId String?
+  role         MembershipRole
+
+  user       User        @relation(fields: [userId], references: [id])
+  restaurant Restaurant? @relation(fields: [restaurantId], references: [id])
+
+  @@index([restaurantId])
+}
+
+model MenuWeek {
+  id           String   @id @default(cuid())
+  restaurantId String
+  startDate    DateTime
+  endDate      DateTime
+  status       String   @default("draft") // draft|scheduled|published|archived
+
+  items      MenuItem[]
+  restaurant Restaurant  @relation(fields: [restaurantId], references: [id])
+  orders     MenuOrder[] @relation("MenuWeekOrders")
+}
+
+model MenuItem {
+  id         String      @id @default(cuid())
+  menuId     String
+  dayIndex   Int // 0..6 (Hétfő=0)
+  titleHU    String
+  descHU     String?
+  titleSK    String?
+  descSK     String?
+  priceCents Int? // Decimal helyett cent
+  allergens  String?
+  imageUrl   String?
+  menuLabel  String? // pl. "Menü 1", "Business menü", "Heti ajánlat"
+  courseType CourseType? // soup / main / dessert / other
+  allWeek    Boolean     @default(false)
+
+  menu MenuWeek @relation(fields: [menuId], references: [id])
+}
+
+model MenuOrder {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  // ÉTTEREM KAPCSOLAT
+  restaurant   Restaurant @relation("RestaurantOrders", fields: [restaurantId], references: [id])
+  restaurantId String
+
+  // HETI MENÜ KAPCSOLAT (opcionális)
+  menu   MenuWeek? @relation("MenuWeekOrders", fields: [menuId], references: [id])
+  menuId String?
+
+  type   OrderType
+  status OrderStatus @default(NEW)
+
+  customerName String
+  phone        String
+  peopleCount  Int?
+  note         String?
+}
+
+// ─────────────────────────────────────────────
+// Bevétel / kiadás modul
+// ─────────────────────────────────────────────
+
+model RevenueChannel {
+  id String @id @default(cuid())
+
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id])
+
+  code String
+  name String
+
+  revenues DailyRevenue[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([restaurantId, code])
+}
+
+model DailyRecord {
+  id           String   @id @default(cuid())
+  restaurantId String
+  date         DateTime
+
+  guestsCount         Int?
+  menusSoldCount      Int?
+  deliveryOrdersCount Int?
+  openingBalanceCents Int?
+  closingBalanceCents Int?
+  notes               String?
+
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id])
+
+  revenues DailyRevenue[]
+  expenses DailyExpense[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([restaurantId, date])
+}
+
+model DailyRevenue {
+  id String @id @default(cuid())
+
+  dailyRecordId String
+  channelId     String
+
+  dailyRecord DailyRecord    @relation(fields: [dailyRecordId], references: [id])
+  channel     RevenueChannel @relation(fields: [channelId], references: [id])
+
+  amountCents Int
+  orderCount  Int?
+  menuCount   Int?
+  notes       String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model DailyExpense {
+  id            String @id @default(cuid())
+  dailyRecordId String
+
+  dailyRecord DailyRecord @relation(fields: [dailyRecordId], references: [id])
+
+  supplier    String // pl. Metro, Bidfood, Húsbolt
+  category    String // pl. Élelmiszer, Tisztítószer, Ital
+  amountCents Int
+  notes       String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Supplier {
+  id           String     @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id])
+
+  name   String // pl. "Jednota", "Lidl", "Tesco", stb.
+  active Boolean @default(true)
+
+  expenses Expense[]
+
+  @@unique([restaurantId, name])
+  @@index([restaurantId])
+}
+
+model DailyFinance {
+  id String @id @default(cuid())
+
+  restaurant   Restaurant? @relation(fields: [restaurantId], references: [id])
+  restaurantId String?
+  date         DateTime?
+
+  // Alapazonosító adatok
+  dayNumber Int? // nap sorszáma (1,2,3,...)
+  dayName   String? // pl. "hétfő", "kedd", "vasárnap"
+
+  // Opcionális: ha akarod, importáláskor kitölthető
+  month Int? // pl. 11
+  year  Int? // pl. 2025
+
+  // Bevételi oszlopok
+  plan        Float?
+  kassza      Float?
+  rozvoz      Float?
+  bistro      Float?
+  restaumatic Float?
+  dochodca    Float?
+  faktura     Float?
+  zostatok    Float?
+  akcie       Float?
+
+  listkyKupeneEur   Float?
+  darcekovyPoukaz   Float?
+  listkyOdovzdaneKs Int?
+  ubytovanie        Float?
+
+  naMieste Int?
+
+  osszes            Float?
+  restauraciaMenuKs Int?
+  rozvozMenuKs      Int?
+  dochodcovMenuKs   Int?
+  zostatokMenuKs    Int?
+  pocetMenuKs       Int?
+
+  summary1 Float?
+  summary2 Float?
+
+  kiadasok Float?
+
+  expenses Expense[]
+
+  vydavkySpolu Float?
+  tovarTyzden  Float?
+  elektrina    Float?
+  plyn         Float?
+  vyplaty      Float?
+  najom        Float?
+  odvody       Float?
+  booking      Float?
+  spolu        Float?
+
+  extraDiff           Float?
+  vsetkyVydavkyTyzden Float?
+  vyplatyTyzden       Float?
+}
+
+model Expense {
+  id String @id @default(cuid())
+
+  day   DailyFinance @relation(fields: [dayId], references: [id], onDelete: Cascade)
+  dayId String
+
+  supplier   Supplier @relation(fields: [supplierId], references: [id])
+  supplierId String
+
+  amount Float
+}
+
+// ─────────────────────────────────────────────
+// Vendégek / házhozszállítás
+// ─────────────────────────────────────────────
+
+model Guest {
+  id      String  @id @default(cuid())
+  name    String?
+  phone   String?
+  email   String?
+  address String?
+  note    String?
+
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  deliveryOrders DeliveryOrder[]
+  events         RestaurantEvent[]
+
+  @@unique([restaurantId, phone])
+  @@index([restaurantId])
+}
+
+model DeliveryOrder {
+  id String @id @default(cuid())
+
+  guest   Guest?  @relation(fields: [guestId], references: [id])
+  guestId String?
+
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id])
+
+  phone   String?
+  address String?
+  place   String? // pl. "Várkony", "DS"
+  note    String?
+
+  timestamp    DateTime?
+  deliveryDate DateTime?
+
+  // MENNYISÉGEK (darabszám)
+  soup         Int?
+  menu1        Int?
+  menu2        Int?
+  menu3        Int?
+  menu4        Int?
+  businessMenu Int?
+  dessert      Int?
+
+  routeOrder Int?
+  delivered  Boolean @default(false)
+
+  isSenior       Boolean @default(false)
+  packagingCount Int     @default(0)
+  totalPrice     Float?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([restaurantId, deliveryDate])
+}
+
+/// Éttermenkénti árlista kiszállításra
+model DeliveryPriceConfig {
+  id String @id @default(cuid())
+
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id])
+
+  /// Ettől a dátumtól érvényes
+  validFrom DateTime @default(now())
+
+  soupPrice         Float @default(0)
+  menu1Price        Float @default(0)
+  menu2Price        Float @default(0)
+  menu3Price        Float @default(0)
+  menu4Price        Float @default(0)
+  businessMenuPrice Float @default(0)
+  dessertPrice      Float @default(0)
+
+  packagingPrice        Float @default(0)
+  seniorDiscountPercent Float @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([restaurantId, validFrom])
+}
+
+// ─────────────────────────────────────────────
+// Konyhai műszak modul + műszakátadás
+// ─────────────────────────────────────────────
+
+model Shift {
+  id           String      @id @default(cuid())
+  restaurantId String
+  date         DateTime
+  type         ShiftType
+  status       ShiftStatus @default(OPEN)
+
+  responsibleId String?
+  notes         String?
+
+  restaurant  Restaurant @relation(fields: [restaurantId], references: [id])
+  responsible User?      @relation("UserResponsibleShifts", fields: [responsibleId], references: [id])
+
+  checklistItems  ShiftChecklistItem[]
+  tasks           ShiftTask[]
+  members         ShiftMember[]
+  inventorySheets InventorySheet[]
+  handovers       ShiftHandover[]
+  prepItems       ShiftPrepItem[]
+  wishes          ShiftWish[]
+
+  createdAt DateTime @default(now())
+
+  @@unique([restaurantId, date, type], name: "restaurantId_date_type")
+}
+
+model ShiftPrepItem {
+  id      String @id @default(cuid())
+  shiftId String
+  shift   Shift  @relation(fields: [shiftId], references: [id])
+
+  name     String // pl. "Barna mártás", "Hal alaplé"
+  category PrepCategory // mártás / alaplé / köret stb.
+  status   PrepStatus   @default(OK)
+
+  quantity String? // szabad szöveg: "2 GN", "3 liter", "1 tálca"
+  location String? // pl. "Hűtő 1, felső polc"
+  expiryAt DateTime? // meddig jó
+  note     String? // extra megjegyzés
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([shiftId])
+}
+
+model ChecklistTemplate {
+  id           String @id @default(cuid())
+  restaurantId String
+
+  group ChecklistGroup
+  label String
+
+  zone      KitchenZone
+  role      StaffRole
+  dayOfWeek Int?
+
+  isActive  Boolean @default(true)
+  sortOrder Int     @default(0)
+
+  restaurant          Restaurant           @relation(fields: [restaurantId], references: [id])
+  shiftChecklistItems ShiftChecklistItem[]
+}
+
+model ShiftChecklistItem {
+  id         String @id @default(cuid())
+  shiftId    String
+  templateId String
+
+  isDone   Boolean @default(false)
+  note     String?
+  hasPhoto Boolean @default(false)
+
+  doneById String?
+  doneAt   DateTime?
+
+  shift    Shift             @relation(fields: [shiftId], references: [id])
+  template ChecklistTemplate @relation(fields: [templateId], references: [id])
+  doneBy   User?             @relation(fields: [doneById], references: [id])
+
+  photos ShiftChecklistPhoto[]
+}
+
+model ShiftChecklistPhoto {
+  id        String   @id @default(cuid())
+  itemId    String
+  url       String
+  createdAt DateTime @default(now())
+
+  item ShiftChecklistItem @relation(fields: [itemId], references: [id])
+}
+
+model ShiftTask {
+  id         String  @id @default(cuid())
+  shiftId    String
+  assigneeId String?
+
+  title       String
+  description String?
+  status      TaskStatus @default(PENDING)
+
+  dueAt       DateTime?
+  completedAt DateTime?
+
+  shift    Shift @relation(fields: [shiftId], references: [id])
+  assignee User? @relation("UserAssignedTasks", fields: [assigneeId], references: [id])
+
+  createdAt DateTime @default(now())
+}
+
+model ShiftMember {
+  id      String    @id @default(cuid())
+  shiftId String
+  userId  String
+  role    StaffRole
+
+  shift Shift @relation(fields: [shiftId], references: [id])
+  user  User  @relation(fields: [userId], references: [id])
+
+  createdAt DateTime @default(now())
+
+  @@unique([shiftId, userId])
+}
+
+model ShiftHandover {
+  id String @id @default(cuid())
+
+  shiftId String
+  shift   Shift  @relation(fields: [shiftId], references: [id])
+
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id])
+
+  outgoingUserId String
+  outgoingUser   User   @relation(fields: [outgoingUserId], references: [id])
+
+  status ShiftHandoverStatus @default(DRAFT)
+
+  // itt már nincs @db.Text, csak sima String
+  miseEnPlace           String
+  tasksSummary          String
+  warnings              String
+  cleanliness           String
+  nextShiftExpectations String
+  chefNote              String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model ShiftWish {
+  id String @id @default(cuid())
+
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id])
+
+  // melyik műszakra vonatkozik a kívánságlista tétel
+  shiftId String
+  shift   Shift  @relation(fields: [shiftId], references: [id])
+
+  title       String // rövid cím, pl. "Holnapi köret előkészítése"
+  description String? // részletes leírás, mit várnak el
+  status      ShiftWishStatus @default(OPEN)
+
+  // ki írta a kívánságot (általában a következő műszak szakácsa)
+  createdById String?
+  createdBy   User?   @relation(fields: [createdById], references: [id])
+
+  createdAt  DateTime  @default(now())
+  resolvedAt DateTime?
+
+  @@index([restaurantId, shiftId])
+}
+
+// ─────────────────────────────────────────────
+// Leltár modul
+// ─────────────────────────────────────────────
+
+model InventoryTemplateItem {
+  id           String @id @default(cuid())
+  restaurantId String
+  name         String
+  unit         String
+  sortOrder    Int    @default(0)
+
+  restaurant Restaurant      @relation(fields: [restaurantId], references: [id])
+  items      InventoryItem[]
+}
+
+model InventorySheet {
+  id           String   @id @default(cuid())
+  restaurantId String
+  shiftId      String?
+  date         DateTime
+
+  createdById String?
+  note        String?
+
+  restaurant Restaurant @relation(fields: [restaurantId], references: [id])
+  shift      Shift?     @relation(fields: [shiftId], references: [id])
+
+  items     InventoryItem[]
+  createdAt DateTime        @default(now())
+
+  @@unique([restaurantId, date], name: "inventory_restaurant_date_unique")
+}
+
+model InventoryItem {
+  id         String @id @default(cuid())
+  sheetId    String
+  templateId String
+
+  quantity Float?
+  note     String?
+
+  sheet    InventorySheet        @relation(fields: [sheetId], references: [id])
+  template InventoryTemplateItem @relation(fields: [templateId], references: [id])
+}
+
+// ─────────────────────────────────────────────
+// HACCP naplók, auditok, eszközök
+// ─────────────────────────────────────────────
+
+model GoodsReceipt {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id])
+
+  date         DateTime
+  supplierName String?
+  productName  String
+  batchNumber  String?
+  expiryDate   DateTime?
+  quantity     Float?
+  unit         String?
+
+  temperature Float?
+  qualityOK   Boolean
+  packagingOK Boolean?
+
+  comment String?
+
+  createdById String?
+  createdBy   User?   @relation(fields: [createdById], references: [id])
+
+  @@index([restaurantId, date])
+}
+
+model GoodsComplaint {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id])
+
+  date         DateTime
+  productName  String
+  manufacturer String?
+  batchNumber  String?
+  expiryDate   DateTime?
+  quantity     Float?
+  reason       String
+
+  createdById String?
+  createdBy   User?   @relation(fields: [createdById], references: [id])
+
+  @@index([restaurantId, date])
+}
+
+model FridgeLog {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id])
+
+  date        DateTime
+  fridgeName  String
+  temperature Float
+  humidity    Float?
+  location    String?
+
+  actionTaken String?
+
+  createdById String?
+  createdBy   User?   @relation(fields: [createdById], references: [id])
+
+  @@index([restaurantId, date])
+  @@index([restaurantId, fridgeName])
+}
+
+model CookingLog {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id])
+
+  date      DateTime
+  dishName  String
+  batchCode String?
+
+  coreTemp    Float?
+  oilTemp     Float?
+  servingTemp Float?
+
+  ccpOk       Boolean?
+  actionTaken String?
+
+  createdById String?
+  createdBy   User?   @relation(fields: [createdById], references: [id])
+
+  @@index([restaurantId, date])
+}
+
+model SampleLog {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id])
+
+  dateTaken   DateTime
+  dishName    String
+  portionSize Float?
+
+  storageFridgeName String?
+  disposalDue       DateTime
+  disposed          Boolean   @default(false)
+  disposedAt        DateTime?
+
+  createdById String?
+  createdBy   User?   @relation(fields: [createdById], references: [id])
+
+  @@index([restaurantId, dateTaken])
+  @@index([restaurantId, disposalDue])
+}
+
+model CleaningLog {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id])
+
+  date        DateTime
+  area        String
+  frequency   CleaningFrequency
+  productUsed String?
+  method      String?
+  completed   Boolean           @default(true)
+  comment     String?
+
+  createdById String?
+  createdBy   User?   @relation(fields: [createdById], references: [id])
+
+  @@index([restaurantId, date])
+  @@index([restaurantId, area])
+}
+
+model PestControlLog {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id])
+
+  date         DateTime
+  baitNumber   String
+  location     String
+  pestsFound   String?
+  baitLossPct  Float?
+  baitReplaced Boolean?
+  notes        String?
+
+  performedBy String?
+
+  createdById String?
+  createdBy   User?   @relation(fields: [createdById], references: [id])
+
+  @@index([restaurantId, date])
+}
+
+model PrepChecklist {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id])
+
+  date                DateTime
+  area                String
+  separateAreaUsed    Boolean
+  separateSinkUsed    Boolean
+  toolsCleanAndMarked Boolean
+  expiredItemsRemoved Boolean
+  maxTimeRespected    Boolean?
+  comment             String?
+
+  createdById String?
+  createdBy   User?   @relation(fields: [createdById], references: [id])
+
+  @@index([restaurantId, date])
+}
+
+model Audit {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id])
+
+  auditNumber       String?
+  date              DateTime
+  area              String
+  auditors          String?
+  auditees          String?
+  scope             String?
+  documents         String?
+  issuesFound       String?
+  correctiveActions String?
+  notes             String?
+
+  createdById String?
+  createdBy   User?   @relation(fields: [createdById], references: [id])
+
+  @@index([restaurantId, date])
+}
+
+model DishProfile {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id])
+
+  name           String
+  group          String
+  description    String?
+  allergens      String?
+  storageTemp    String?
+  shelfLifeInfo  String?
+  servingTemp    String?
+  reheatingRules String?
+
+  @@unique([restaurantId, name])
+  @@index([restaurantId, group])
+}
+
+model CorrectiveAction {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id])
+
+  date        DateTime
+  module      String
+  referenceId String?
+  description String
+  resolved    Boolean   @default(false)
+  resolvedAt  DateTime?
+  resolvedBy  String?
+
+  createdById String?
+  createdBy   User?   @relation(fields: [createdById], references: [id])
+
+  @@index([restaurantId, date])
+  @@index([module, referenceId])
+}
+
+model LabTest {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id])
+
+  date          DateTime
+  type          String
+  labName       String?
+  resultSummary String
+  actionTaken   String?
+
+  createdById String?
+  createdBy   User?   @relation(fields: [createdById], references: [id])
+
+  @@index([restaurantId, date])
+}
+
+model MeasuringDevice {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id])
+
+  name            String
+  type            String
+  range           String?
+  serialNumber    String?
+  location        String?
+  lastCalibration DateTime?
+  calibrationDue  DateTime?
+
+  @@index([restaurantId, name])
+}
+
+// ─────────────────────────────────────────────
+// Esemény modul – fő esemény tábla
+// ─────────────────────────────────────────────
+
+model RestaurantEvent {
+  id           String     @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id])
+  guestId      String?
+  guest        Guest?     @relation(fields: [guestId], references: [id])
+
+  type   EventType
+  status EventStatus @default(INQUIRY)
+
+  title     String // pl. "Kovács Anna 50. születésnapja"
+  date      DateTime // esemény napja
+  startTime DateTime? // kezdés
+  endTime   DateTime? // zárás / tervezett vége
+
+  guestsTotal Int // összlétszám
+  guestsKids  Int? // gyerekek száma
+
+  contactName  String
+  contactPhone String
+  contactEmail String?
+
+  // Pénzügyek – mind centben
+  pricePerPersonCents Int?
+  menuSubtotalCents   Int?
+  drinksSubtotalCents Int?
+  otherSubtotalCents  Int?
+  discountCents       Int?
+  totalPriceCents     Int?
+  depositCents        Int?
+  depositPaidAt       DateTime?
+
+  // Szervezési infók
+  menuType        MenuType?
+  roomName        String?
+  tableLayout     String? // pl. "3×10 fős sor"
+  hasCake         Boolean   @default(false)
+  cakeDetails     String?
+  decorationNotes String?
+  musicNotes      String?
+  allergyNotes    String?
+
+  kitchenNotes String?
+  serviceNotes String?
+  generalNotes String?
+
+  // Kapcsolatok a részletekhez
+  menuItems  EventMenuItem[]
+  drinkItems EventDrinkItem[]
+  timeline   EventTimelineItem[]
+  tasks      EventTask[]
+
+  tableReservations TableReservation[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([restaurantId, date])
+}
+
+model EventMenuItem {
+  id      String          @id @default(cuid())
+  eventId String
+  event   RestaurantEvent @relation(fields: [eventId], references: [id])
+
+  courseType  CourseType? // leves / főétel / desszert / other
+  name        String
+  description String?
+  allergens   String?
+
+  portionsPlanned      Int
+  portionsReserve      Int?
+  pricePerPortionCents Int?
+
+  notes String?
+
+  @@index([eventId])
+}
+
+model EventDrinkItem {
+  id      String          @id @default(cuid())
+  eventId String
+  event   RestaurantEvent @relation(fields: [eventId], references: [id])
+
+  name              String
+  category          String? // bor, sör, üdítő stb.
+  unit              String? // palack, liter, üveg, adag
+  quantityPlanned   Float
+  pricePerUnitCents Int?
+
+  isUnlimited Boolean @default(false) // italcsomag
+  notes       String?
+
+  @@index([eventId])
+}
+
+model EventTimelineItem {
+  id      String          @id @default(cuid())
+  eventId String
+  event   RestaurantEvent @relation(fields: [eventId], references: [id])
+
+  time  DateTime
+  label String
+  notes String?
+
+  @@index([eventId, time])
+}
+
+model EventTask {
+  id      String          @id @default(cuid())
+  eventId String
+  event   RestaurantEvent @relation(fields: [eventId], references: [id])
+
+  title       String
+  description String?
+  role        EventTaskRole
+  status      EventTaskStatus @default(TODO)
+
+  dueAt  DateTime?
+  doneAt DateTime?
+
+  @@index([eventId, role])
+}
+
+// Egyszerű asztalfoglalás (általános vendégeknek)
+
+model TableReservation {
+  id           String     @id @default(cuid())
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id])
+
+  dateTime DateTime
+  guests   Int
+
+  name     String
+  phone    String
+  email    String?
+  occasion String? // pl. "szülinap", "üzleti vacsora"
+  notes    String?
+
+  // ha egy konkrét eseményhez kötjük (pl. nagyobb rendezvény)
+  eventId String?
+  event   RestaurantEvent? @relation(fields: [eventId], references: [id])
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([restaurantId, dateTime])
+}
