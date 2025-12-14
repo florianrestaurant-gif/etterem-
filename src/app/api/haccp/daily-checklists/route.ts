@@ -1,64 +1,46 @@
-// src/app/api/haccp/daily-checklists/route.ts
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "@/lib/db";
-import { getServerSession } from "next-auth";
-import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+import { getRestaurantId } from "@/lib/auth";
 
-// ------------------------------------------------------------
-// Helpers
-// ------------------------------------------------------------
-function parseYyyyMmDdToLocalMidnight(dateStr: string): Date | null {
-  // dateStr: "YYYY-MM-DD"
-  const [y, m, d] = dateStr.split("-").map(Number);
-  if (!y || !m || !d) return null;
-  const dt = new Date(y, m - 1, d, 0, 0, 0, 0);
-  return Number.isNaN(dt.getTime()) ? null : dt;
-}
-
-// JS getDay(): 0 vasárnap ... 6 szombat
-// nálunk: 0 hétfő ... 6 vasárnap
-function toTemplateDayIndex(localMidnight: Date): number {
-  const js = localMidnight.getDay();
-  return js === 0 ? 6 : js - 1;
-}
-
-async function resolveRestaurantId(req: Request): Promise<string | null> {
-  const session = await getServerSession(authOptions);
-  if (!session?.user?.id) return null;
-
-  const user = await prisma.user.findUnique({
-    where: { id: session.user.id },
-    select: { isGlobalAdmin: true },
-  });
-  if (!user) return null;
-
-  const { searchParams } = new URL(req.url);
-  const restaurantIdFromQuery = searchParams.get("restaurantId");
-
-  // Global admin: ha adsz restaurantId-t query-ben, azt használjuk
-  if (user.isGlobalAdmin && restaurantIdFromQuery) return restaurantIdFromQuery;
-
-  // Egyébként: első membership étterem
-  const membership = await prisma.membership.findFirst({
-    where: { userId: session.user.id, restaurantId: { not: null } },
-    select: { restaurantId: true },
-    orderBy: { id: "asc" },
-  });
-
-  return membership?.restaurantId ?? null;
-}
-
-// ------------------------------------------------------------
+// ---------------------------------------------------------------------------
 // GET /api/haccp/daily-checklists?date=YYYY-MM-DD&type=OPENING|CLOSING
-// - adott napra visszaadja a checklistet
-// - ha nincs, sablonból legenerálja (dayOfWeek alapján)
-// - ha már létezik, de nincsenek itemek, utólag feltölti sablonból
-// ------------------------------------------------------------
+//  - adott napra visszaadja a checklistet
+//  - ha nincs, sablonból legenerálja (dayOfWeek alapján)
+//  - ha már létezik, de nincsenek itemek, utólag feltölti sablonból
+//  - FONTOS: dátumot NAPI INTERVALLUMMAL kezelünk (nem exact Date egyezés)
+// ---------------------------------------------------------------------------
+
+function getDayRangeLocal(dateStr: string) {
+  const base = new Date(dateStr);
+  if (Number.isNaN(base.getTime())) return null;
+
+  const start = new Date(
+    base.getFullYear(),
+    base.getMonth(),
+    base.getDate(),
+    0,
+    0,
+    0,
+    0
+  );
+  const end = new Date(
+    base.getFullYear(),
+    base.getMonth(),
+    base.getDate() + 1,
+    0,
+    0,
+    0,
+    0
+  );
+
+  return { start, end };
+}
+
 export async function GET(req: NextRequest) {
   try {
-    const restaurantId = await resolveRestaurantId(req);
+    const restaurantId = await getRestaurantId();
     if (!restaurantId) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      return NextResponse.json({ error: "No restaurant" }, { status: 401 });
     }
 
     const { searchParams } = new URL(req.url);
@@ -73,40 +55,38 @@ export async function GET(req: NextRequest) {
     }
 
     if (type !== "OPENING" && type !== "CLOSING") {
-      return NextResponse.json(
-        { error: "type csak OPENING vagy CLOSING lehet." },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: "Érvénytelen type." }, { status: 400 });
     }
 
-    const dayStart = parseYyyyMmDdToLocalMidnight(dateStr);
-    if (!dayStart) {
-      return NextResponse.json(
-        { error: "date formátuma YYYY-MM-DD legyen." },
-        { status: 400 }
-      );
+    const range = getDayRangeLocal(dateStr);
+    if (!range) {
+      return NextResponse.json({ error: "Érvénytelen date." }, { status: 400 });
     }
 
-    const dayIndex = toTemplateDayIndex(dayStart);
+    const { start, end } = range;
 
-    // 1) Meglévő checklist keresése (a dátumot nálunk 00:00-kor tároljuk)
-    let checklist = await prisma.dailyChecklist.findUnique({
+    // JS: 0 = vasárnap, 1 = hétfő...
+    // dayIndex: 0 = hétfő, 6 = vasárnap (így tároljuk a sablonban)
+    const dayIndex = start.getDay() === 0 ? 6 : start.getDay() - 1;
+
+    // 1) Meglévő checklist keresése NAPI tartományra, itemekkel együtt
+    let checklist = await prisma.dailyChecklist.findFirst({
       where: {
-        // a schema-ban: @@unique([restaurantId, date, type], name: "unique_daily_checklist")
-        unique_daily_checklist: {
-          restaurantId,
-          date: dayStart,
-          type: type as any,
+        restaurantId,
+        type: type as any,
+        date: {
+          gte: start,
+          lt: end,
         },
       },
       include: {
         items: {
-          orderBy: [{ createdAt: "asc" }],
+          orderBy: { label: "asc" },
         },
       },
     });
 
-    // 2) Ha nincs checklist: sablonból létrehozzuk
+    // 2) Ha nincs checklist, sablonból újonnan létrehozzuk
     if (!checklist) {
       const templates = await prisma.checklistTemplate.findMany({
         where: {
@@ -115,13 +95,14 @@ export async function GET(req: NextRequest) {
           checklistType: type as any,
           dayOfWeek: dayIndex,
         },
-        orderBy: [{ sortOrder: "asc" }, { label: "asc" }],
+        orderBy: { sortOrder: "asc" },
       });
 
       checklist = await prisma.dailyChecklist.create({
         data: {
           restaurantId,
-          date: dayStart,
+          // a nap eleje legyen mentve (stabil összehasonlítás)
+          date: start,
           type: type as any,
           items: {
             create: templates.map((t) => ({
@@ -131,11 +112,11 @@ export async function GET(req: NextRequest) {
           },
         },
         include: {
-          items: { orderBy: [{ createdAt: "asc" }] },
+          items: { orderBy: { label: "asc" } },
         },
       });
     } else if (!checklist.items || checklist.items.length === 0) {
-      // 3) Checklist létezik, de üres → utólag töltjük fel sablonból
+      // 3) Már létezik checklist, de NINCS benne item → utólag töltjük fel sablonból
       const templates = await prisma.checklistTemplate.findMany({
         where: {
           restaurantId,
@@ -143,7 +124,7 @@ export async function GET(req: NextRequest) {
           checklistType: type as any,
           dayOfWeek: dayIndex,
         },
-        orderBy: [{ sortOrder: "asc" }, { label: "asc" }],
+        orderBy: { sortOrder: "asc" },
       });
 
       if (templates.length > 0) {
@@ -158,15 +139,15 @@ export async function GET(req: NextRequest) {
             },
           },
           include: {
-            items: { orderBy: [{ createdAt: "asc" }] },
+            items: { orderBy: { label: "asc" } },
           },
         });
       }
     }
 
-    return NextResponse.json({ ok: true, checklist });
+    return NextResponse.json({ checklist });
   } catch (error) {
-    console.error("[DAILY_CHECKLISTS_GET]", error);
+    console.error("GET /api/haccp/daily-checklists error:", error);
     return NextResponse.json(
       { error: "Hiba történt a checklist betöltésekor." },
       { status: 500 }
@@ -174,21 +155,13 @@ export async function GET(req: NextRequest) {
   }
 }
 
-// ------------------------------------------------------------
-// PUT/PATCH – checklist item pipálás + megjegyzés
-// Body: { itemId, isDone, note? }
-// - ownership check: item -> checklist.restaurantId = current restaurant
-// - doneAt + doneById rendben
-// ------------------------------------------------------------
+// Közös update logika – ezt hívja PUT és PATCH
 async function updateChecklistItem(req: NextRequest) {
   try {
-    const restaurantId = await resolveRestaurantId(req);
+    const restaurantId = await getRestaurantId();
     if (!restaurantId) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      return NextResponse.json({ error: "No restaurant" }, { status: 401 });
     }
-
-    const session = await getServerSession(authOptions);
-    const userId = session?.user?.id ?? null;
 
     const body = await req.json();
     const { itemId, isDone, note } = body as {
@@ -204,15 +177,15 @@ async function updateChecklistItem(req: NextRequest) {
       );
     }
 
-    // Ownership check
+    // (opcionális, de hasznos) biztonsági check: item ehhez az étteremhez tartozik-e
     const existing = await prisma.dailyChecklistItem.findUnique({
       where: { id: itemId },
-      include: { checklist: { select: { restaurantId: true } } },
+      include: { checklist: true },
     });
 
     if (!existing || existing.checklist.restaurantId !== restaurantId) {
       return NextResponse.json(
-        { error: "A checklist item nem található." },
+        { error: "A checklist pont nem található ennél az étteremnél." },
         { status: 404 }
       );
     }
@@ -223,13 +196,12 @@ async function updateChecklistItem(req: NextRequest) {
         isDone,
         note: typeof note === "string" ? note : null,
         doneAt: isDone ? new Date() : null,
-        doneById: isDone ? userId : null,
       },
     });
 
-    return NextResponse.json({ ok: true, item: updated });
+    return NextResponse.json({ ok: true, updated });
   } catch (error) {
-    console.error("[DAILY_CHECKLISTS_UPDATE]", error);
+    console.error("UPDATE /api/haccp/daily-checklists error:", error);
     return NextResponse.json(
       { error: "Hiba történt a checklist frissítésekor." },
       { status: 500 }
