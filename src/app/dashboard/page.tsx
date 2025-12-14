@@ -1,25 +1,26 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getServerSession } from "next-auth";
-import { PrismaClient } from "@prisma/client";
-
-const prisma = new PrismaClient();
+import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+import { prisma } from "@/lib/db";
 
 type DashboardProps = {
-  searchParams?: {
-    message?: string;
-  };
+  searchParams?: Promise<{ message?: string }>;
 };
 
 export default async function DashboardPage({ searchParams }: DashboardProps) {
-  const session = await getServerSession();
+  // Next 16: searchParams lehet Promise
+  const sp = (await searchParams) ?? {};
+  const flashMessage = sp.message;
 
-  if (!session?.user?.email) {
+  const session = await getServerSession(authOptions);
+
+  if (!session?.user?.id) {
     redirect("/login");
   }
 
   const user = await prisma.user.findUnique({
-    where: { email: session.user.email },
+    where: { id: session.user.id },
     include: {
       memberships: {
         include: { restaurant: true },
@@ -32,7 +33,6 @@ export default async function DashboardPage({ searchParams }: DashboardProps) {
   }
 
   const isGlobalAdmin = user.isGlobalAdmin;
-  const flashMessage = searchParams?.message;
 
   // GLOBAL ADMIN NÉZET – összes étterem listája
   if (isGlobalAdmin) {
@@ -107,6 +107,7 @@ export default async function DashboardPage({ searchParams }: DashboardProps) {
                     const owners = r.memberships.filter(
                       (m) => m.role === "RESTAURANT_OWNER"
                     );
+
                     const ownerEmails =
                       owners.length > 0
                         ? owners
@@ -123,9 +124,7 @@ export default async function DashboardPage({ searchParams }: DashboardProps) {
                             ID: {r.id}
                           </div>
                         </td>
-                        <td className="px-3 py-2 align-top text-xs">
-                          {r.slug}
-                        </td>
+                        <td className="px-3 py-2 align-top text-xs">{r.slug}</td>
                         <td className="px-3 py-2 align-top text-xs">
                           {ownerEmails}
                         </td>
@@ -140,12 +139,27 @@ export default async function DashboardPage({ searchParams }: DashboardProps) {
                         </td>
                         <td className="px-3 py-2 align-top text-right">
                           <div className="flex flex-col items-end gap-1">
+                            {/* A-variáció (1 admin = 1 étterem) esetén ezek nem váltanak éttermet API szinten,
+                               de global admin áttekintéshez maradhatnak linknek. */}
                             <Link
-                              href={`/dashboard/finance?restaurantId=${r.id}`}
+                              href={`/dashboard/finance`}
                               className="text-xs text-blue-600 underline"
                             >
-                              Belépés ide (pénzügyek)
+                              Pénzügyek
                             </Link>
+                            <Link
+                              href={`/dashboard/menus`}
+                              className="text-xs text-blue-600 underline"
+                            >
+                              Heti menü
+                            </Link>
+                            <Link
+                              href={`/dashboard/delivery`}
+                              className="text-xs text-blue-600 underline"
+                            >
+                              Kiszállítás
+                            </Link>
+                            
                           </div>
                         </td>
                       </tr>
@@ -160,7 +174,7 @@ export default async function DashboardPage({ searchParams }: DashboardProps) {
     );
   }
 
-  // NORMÁL USER NÉZET – étterem admin főoldal gombokkal
+  // NORMÁL USER NÉZET – 1 admin = 1 étterem (első membership)
   const membership = user.memberships[0];
   const restaurant = membership?.restaurant;
 
@@ -186,7 +200,8 @@ export default async function DashboardPage({ searchParams }: DashboardProps) {
             Itt éred el az összes modult ehhez az étteremhez.
           </p>
           <p className="text-xs text-gray-500">
-            Aktív étterem: <span className="font-medium">{restaurant.name}</span>
+            Aktív étterem:{" "}
+            <span className="font-medium">{restaurant.name}</span>
           </p>
         </header>
 
@@ -202,7 +217,7 @@ export default async function DashboardPage({ searchParams }: DashboardProps) {
           </Link>
 
           <Link
-            href="/dashboard/restaurant"
+            href="/dashboard/menus"
             className="rounded-xl border bg-white px-4 py-4 flex flex-col gap-1 hover:shadow-sm transition"
           >
             <span className="text-sm font-semibold">
@@ -214,17 +229,17 @@ export default async function DashboardPage({ searchParams }: DashboardProps) {
           </Link>
 
           <Link
-            href="/dashboard/kitchen"
+            href="/kitchen/shift-handovers"
             className="rounded-xl border bg-white px-4 py-4 flex flex-col gap-1 hover:shadow-sm transition"
           >
             <span className="text-sm font-semibold">Konyha & műszak</span>
             <span className="text-xs text-gray-500">
-              Műszakok, checklisták, HACCP naplók (hamarosan teljesen kész).
+              Műszakok, checklisták,
             </span>
           </Link>
 
           <Link
-            href="/dashboard/inventory"
+            href="/kitchen/inventory"
             className="rounded-xl border bg-white px-4 py-4 flex flex-col gap-1 hover:shadow-sm transition"
           >
             <span className="text-sm font-semibold">Leltár</span>
@@ -247,11 +262,21 @@ export default async function DashboardPage({ searchParams }: DashboardProps) {
             href="/dashboard/guests"
             className="rounded-xl border bg-white px-4 py-4 flex flex-col gap-1 hover:shadow-sm transition"
           >
-            <span className="text-sm font-semibold">CRM (hamarosan)</span>
+            <span className="text-sm font-semibold">CRM</span>
             <span className="text-xs text-gray-500">
               Vendégadatbázis, hírlevelek, kampányok.
             </span>
           </Link>
+<Link
+  href="/dashboard/haccp/cleaning-log"
+  className="rounded-xl border bg-white px-4 py-4 flex flex-col gap-1 hover:shadow-sm transition"
+>
+  <span className="text-sm font-semibold">HACCP</span>
+  <span className="text-xs text-gray-500">
+    Hűtőnapló, áruátvétel, hőkezelés, takarítás, stb.
+  </span>
+</Link>
+
         </section>
       </div>
     </main>

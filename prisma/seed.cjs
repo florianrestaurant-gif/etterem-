@@ -1,5 +1,7 @@
+// prisma/seed.cjs
 // eslint-disable-next-line @typescript-eslint/no-require-imports
-const { PrismaClient } = require("@prisma/client");
+const { PrismaClient, MembershipRole } = require("@prisma/client");
+const bcrypt = require("bcrypt");
 
 const prisma = new PrismaClient();
 
@@ -36,33 +38,80 @@ const inventoryTemplateItems = [
 async function main() {
   console.log("➡ Starting seed…");
 
-  // 1. Étterem keresése vagy létrehozása
-  let restaurant = await prisma.restaurant.findFirst();
+  // 1) Étterem: legyen pontosan 1 alap (slug unique, ezért upsert a legstabilabb)
+  const restaurant = await prisma.restaurant.upsert({
+    where: { slug: "default-restaurant" },
+    update: {
+      name: "Szent Flórián",
+      phone: "0918429207",
+    },
+    create: {
+      slug: "default-restaurant",
+      name: "Szent Flórián",
+      phone: "0918429207",
+    },
+  });
 
-  if (!restaurant) {
-    console.log("➡ Nincs étterem, létrehozok egyet…");
+  console.log("➡ Restaurant ready:", restaurant.name, restaurant.id);
 
-    restaurant = await prisma.restaurant.create({
+  // 2) Global admin user
+  const adminEmail = "admin@local";
+  const adminPassword = "admin1234"; // később cseréld!
+  const hash = await bcrypt.hash(adminPassword, 10);
+
+  let admin = await prisma.user.findUnique({ where: { email: adminEmail } });
+
+  if (!admin) {
+    admin = await prisma.user.create({
       data: {
-        slug: "default-restaurant",
-        name: "Szent Flórián",
-        phone: "0918429207",
+        email: adminEmail,
+        password: hash,
+        isGlobalAdmin: true,
+        // preferredLanguage: alapból HU a schema-ban, nem kötelező megadni
       },
     });
-
-    console.log("➡ Új étterem létrehozva:", restaurant.id);
+    console.log("➡ Global admin created:", admin.email, admin.id);
   } else {
-    console.log("➡ Meglévő étterem:", restaurant.name);
+    // frissítsük, hogy biztos global admin legyen és a jelszó is ismert
+    admin = await prisma.user.update({
+      where: { id: admin.id },
+      data: { password: hash, isGlobalAdmin: true },
+    });
+    console.log("➡ Global admin updated:", admin.email, admin.id);
   }
 
-  // 2. Régi template törlése
+  // 3) Membership: A variáció (1 admin = 1 étterem)
+  const existingMembership = await prisma.membership.findFirst({
+    where: { userId: admin.id },
+  });
+
+  if (!existingMembership) {
+    await prisma.membership.create({
+      data: {
+        userId: admin.id,
+        restaurantId: restaurant.id,
+        role: MembershipRole.RESTAURANT_OWNER,
+      },
+    });
+    console.log("➡ Membership created (RESTAURANT_OWNER)");
+  } else {
+    // ha valamiért már van, legyen hozzárendelve az étteremhez és legyen OWNER
+    await prisma.membership.update({
+      where: { id: existingMembership.id },
+      data: {
+        restaurantId: restaurant.id,
+        role: MembershipRole.RESTAURANT_OWNER,
+      },
+    });
+    console.log("➡ Membership updated to default restaurant + OWNER");
+  }
+
+  // 4) Inventory template seed
   await prisma.inventoryTemplateItem.deleteMany({
     where: { restaurantId: restaurant.id },
   });
-
   console.log("➡ Régi inventory template törölve.");
 
-  // 3. Új template beszúrása
   await prisma.inventoryTemplateItem.createMany({
     data: inventoryTemplateItems.map((item) => ({
       restaurantId: restaurant.id,
@@ -73,6 +122,7 @@ async function main() {
   });
 
   console.log("✅ Inventory template seed kész!");
+  console.log(`✅ Login: ${adminEmail} / ${adminPassword}`);
 }
 
 main()

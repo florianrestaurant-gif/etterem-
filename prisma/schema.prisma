@@ -167,6 +167,27 @@ enum EventTaskStatus {
   IN_PROGRESS
   DONE
 }
+/// Napi checklist típus: nyitás / zárás
+enum ChecklistType {
+  OPENING
+  CLOSING
+}
+
+enum HeatTreatmentStatus {
+  OK
+  ERROR
+}
+
+enum CoolingStatus {
+  OK
+  ERROR
+}
+
+enum FridgeType {
+  FRIDGE
+  FREEZER
+  CHILLROOM
+}
 
 // ─────────────────────────────────────────────
 // Core: User, Restaurant, Membership, Menük, Rendelések
@@ -203,6 +224,13 @@ model User {
   audits            Audit[]
   correctiveActions CorrectiveAction[]
   labTests          LabTest[]
+    // Napi nyitás/zárás
+  dailyChecklists     DailyChecklist[]
+  dailyChecklistItems DailyChecklistItem[]
+
+  // Visszahűtés
+  coolingLogs CoolingLog[]
+
 
   // Műszakátadások, amiket ez a user töltött ki
   shiftHandovers ShiftHandover[]
@@ -257,6 +285,12 @@ model Restaurant {
   wishes               ShiftWish[]
   events               RestaurantEvent[]
   tableReservations    TableReservation[]
+    // HACCP kiegészítések
+  dailyChecklists    DailyChecklist[]
+  cleaningTemplates  CleaningTemplate[]
+  fridgeDevices      FridgeDevice[]
+  coolingLogs        CoolingLog[]
+
 }
 
 model Membership {
@@ -641,9 +675,11 @@ model ChecklistTemplate {
 
   isActive  Boolean @default(true)
   sortOrder Int     @default(0)
+  checklistType ChecklistType?
 
   restaurant          Restaurant           @relation(fields: [restaurantId], references: [id])
   shiftChecklistItems ShiftChecklistItem[]
+  dailyChecklistItems DailyChecklistItem[]
 }
 
 model ShiftChecklistItem {
@@ -813,25 +849,32 @@ model GoodsReceipt {
   restaurantId String
   restaurant   Restaurant @relation(fields: [restaurantId], references: [id])
 
-  date         DateTime
-  supplierName String?
-  productName  String
-  batchNumber  String?
-  expiryDate   DateTime?
-  quantity     Float?
-  unit         String?
+  date        DateTime
+  supplier    String
+  productName String
 
-  temperature Float?
-  qualityOK   Boolean
-  packagingOK Boolean?
+  quantity    Float?
+  unit        String?
+  batchNumber String?
+  expiryDate  DateTime?
+  deliveryTemp Float?
 
-  comment String?
+  tempOk       Boolean @default(true)
+  packagingOk  Boolean @default(true)
+  appearanceOk Boolean @default(true)
+  documentsOk  Boolean @default(true)
+
+  rejected         Boolean @default(false)
+  correctiveAction String?
+  note             String?
+  documentUrl      String?
 
   createdById String?
-  createdBy   User?   @relation(fields: [createdById], references: [id])
+  createdBy   User? @relation(fields: [createdById], references: [id])
 
   @@index([restaurantId, date])
 }
+
 
 model GoodsComplaint {
   id        String   @id @default(cuid())
@@ -871,7 +914,12 @@ model FridgeLog {
 
   createdById String?
   createdBy   User?   @relation(fields: [createdById], references: [id])
+  
+    // ÚJ (opcionális) kapcsolat, a régi fridgeName megmarad
+  fridgeDeviceId String?
+  fridgeDevice   FridgeDevice? @relation(fields: [fridgeDeviceId], references: [id])
 
+  @@index([fridgeDeviceId, date])
   @@index([restaurantId, date])
   @@index([restaurantId, fridgeName])
 }
@@ -899,6 +947,108 @@ model CookingLog {
 
   @@index([restaurantId, date])
 }
+model DailyChecklist {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id])
+
+  date DateTime
+  type ChecklistType
+
+  isCompleted   Boolean   @default(false)
+  completedAt   DateTime?
+  completedById String?
+  completedBy   User?     @relation(fields: [completedById], references: [id])
+
+  items DailyChecklistItem[]
+
+  @@unique([restaurantId, date, type], name: "unique_daily_checklist")
+}
+
+model DailyChecklistItem {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  checklistId String
+  checklist   DailyChecklist @relation(fields: [checklistId], references: [id])
+
+  templateId String?
+  template   ChecklistTemplate? @relation(fields: [templateId], references: [id])
+
+  label     String
+  isDone    Boolean @default(false)
+  note      String?
+  photoUrls String? // több fotó: CSV vagy JSON string
+  doneAt    DateTime?
+  doneById  String?
+  doneBy    User?   @relation(fields: [doneById], references: [id])
+}
+model FridgeDevice {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id])
+
+  name     String
+  type     FridgeType
+  location String
+
+  minTemp Float?
+  maxTemp Float?
+
+  logs FridgeLog[]
+
+  @@unique([restaurantId, name], map: "uniq_fridgedevice_restaurant_name")
+}
+model CoolingLog {
+  id String @id @default(cuid())
+
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id])
+
+  itemName     String
+  batchCode    String?
+
+  targetTemp   Float
+  measuredTemp Float
+
+  startTime DateTime
+  endTime   DateTime
+
+  operatorId String?
+  operator   User? @relation(fields: [operatorId], references: [id])
+
+  notes  String?
+  status CoolingStatus
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+model HeatTreatmentLog {
+  id String @id @default(cuid())
+
+  restaurantId String
+
+  itemName     String
+  batchCode    String?
+
+  targetTemp   Int
+  measuredTemp Int
+
+  startTime DateTime
+  endTime   DateTime
+
+  operatorId String?
+  status     HeatTreatmentStatus @default(OK)
+
+  notes     String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
 
 model SampleLog {
   id        String   @id @default(cuid())
@@ -921,6 +1071,28 @@ model SampleLog {
 
   @@index([restaurantId, dateTaken])
   @@index([restaurantId, disposalDue])
+}
+model CleaningTemplate {
+  id        String   @id @default(cuid())
+  createdAt DateTime @default(now())
+
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id])
+
+  task        String
+  description String?
+
+  monday    Boolean @default(false)
+  tuesday   Boolean @default(false)
+  wednesday Boolean @default(false)
+  thursday  Boolean @default(false)
+  friday    Boolean @default(false)
+  saturday  Boolean @default(false)
+  sunday    Boolean @default(false)
+
+  isActive Boolean @default(true)
+
+  @@index([restaurantId])
 }
 
 model CleaningLog {

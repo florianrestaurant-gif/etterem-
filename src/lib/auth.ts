@@ -1,51 +1,35 @@
-import type { NextAuthOptions } from "next-auth";
-import Credentials from "next-auth/providers/credentials";
+// src/lib/auth.ts
+import { getServerSession } from "next-auth";
+import type { NextRequest } from "next/server";
 import { prisma } from "@/lib/db";
-import bcrypt from "bcrypt";
+import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 
-export const authConfig: NextAuthOptions = {
-  session: { strategy: "jwt" },
-  pages: { signIn: "/login" },
-  providers: [
-    Credentials({
-      name: "Credentials",
-      credentials: {
-        email: { label: "Email", type: "email" },
-        password: { label: "Password", type: "password" },
-      },
-      authorize: async (creds) => {
-        const email = (creds?.email || "").trim().toLowerCase();
-        const password = creds?.password || "";
-        if (!email || !password) return null;
+type ReqLike = Request | NextRequest;
 
-        const user = await prisma.user.findUnique({ where: { email } });
-        if (!user) return null;
+export async function getRestaurantId(req?: ReqLike): Promise<string | null> {
+  const session = await getServerSession(authOptions);
+  const userId = session?.user?.id;
+  if (!userId) return null;
 
-        const ok = await bcrypt.compare(password, user.password);
-        if (!ok) return null;
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { isGlobalAdmin: true },
+  });
+  if (!user) return null;
 
-        return { id: user.id, email: user.email };
-      },
-    }),
-  ],
-  callbacks: {
-  async jwt({ token, user }) {
-    if (user) {
-      // a credentials providerben a user-nek van id-je
-      const u = user as { id: string; email?: string };
-      token.userId = u.id;
-    }
-    return token;
-  },
-  async session({ session, token }) {
-    if (token?.userId) {
-      // session.user biztosan létezik NextAuth-ban
-      session.user = {
-        ...session.user,
-        id: token.userId,
-      };
-    }
-    return session;
-  },
-},
-};
+  // Global admin: ha van restaurantId query param, azt használjuk
+  if (user.isGlobalAdmin && req) {
+    const { searchParams } = new URL(req.url);
+    const rid = searchParams.get("restaurantId");
+    if (rid) return rid;
+  }
+
+  // Normál user: első membership étterem
+  const membership = await prisma.membership.findFirst({
+    where: { userId, restaurantId: { not: null } },
+    select: { restaurantId: true },
+    orderBy: { id: "asc" },
+  });
+
+  return membership?.restaurantId ?? null;
+}
