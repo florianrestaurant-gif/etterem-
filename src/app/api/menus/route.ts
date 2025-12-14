@@ -1,36 +1,42 @@
+// src/app/api/menus/route.ts
 import { NextResponse } from "next/server";
-import { getServerSession } from "next-auth";
-import { authConfig } from "@/lib/auth";
 import { prisma } from "@/lib/db";
+import { getRestaurantId } from "@/lib/auth";
 
 type CreateMenuBody = {
   restaurantId: string;
-  startDate: string; // "2025-11-17" (input[type=date]-ből jön)
+  startDate: string; // "2025-11-17"
   endDate: string;   // "2025-11-21"
 };
 
 export async function POST(req: Request) {
   try {
-    const session = await getServerSession(authConfig);
-    if (!session?.user?.id) {
-      return NextResponse.json(
-        { ok: false, error: "Unauthorized" },
-        { status: 401 }
-      );
+    // Auth + tenant kiválasztás (global adminnál restaurantId query param működik)
+    const currentRestaurantId = await getRestaurantId(req);
+    if (!currentRestaurantId) {
+      return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
     }
 
     const body = (await req.json()) as CreateMenuBody;
 
-    if (!body.restaurantId || !body.startDate || !body.endDate) {
+    // Biztonság: csak a saját / kiválasztott étteremre engedjük
+    if (!body.restaurantId || body.restaurantId !== currentRestaurantId) {
       return NextResponse.json(
-        { ok: false, error: "Hiányzó mezők (étterem, kezdő- és záródátum)" },
+        { ok: false, error: "Nincs jogosultság ehhez az étteremhez." },
+        { status: 403 }
+      );
+    }
+
+    if (!body.startDate || !body.endDate) {
+      return NextResponse.json(
+        { ok: false, error: "Hiányzó mezők (kezdő- és záródátum)" },
         { status: 400 }
       );
     }
 
-    // Ellenőrizzük, hogy az étterem létezik-e
     const restaurant = await prisma.restaurant.findUnique({
       where: { id: body.restaurantId },
+      select: { id: true },
     });
 
     if (!restaurant) {
@@ -50,13 +56,12 @@ export async function POST(req: Request) {
       );
     }
 
-    // Új heti menü létrehozása draft státusszal
     const menu = await prisma.menuWeek.create({
       data: {
         restaurantId: restaurant.id,
         startDate: start,
         endDate: end,
-        status: "draft", // alapértelmezett
+        status: "draft",
       },
     });
 

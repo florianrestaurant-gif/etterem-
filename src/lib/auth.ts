@@ -6,6 +6,9 @@ import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 
 type ReqLike = Request | NextRequest;
 
+// Kompatibilitás: ahol eddig authConfig-et importáltál, ott továbbra is működjön
+export const authConfig = authOptions;
+
 export async function getRestaurantId(req?: ReqLike): Promise<string | null> {
   const session = await getServerSession(authOptions);
   const userId = session?.user?.id;
